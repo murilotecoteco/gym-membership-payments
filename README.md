@@ -20,6 +20,7 @@
 ![Express](https://img.shields.io/badge/Express-000000?style=for-the-badge&logo=express&logoColor=white)
 ![Supabase](https://img.shields.io/badge/Supabase-3ECF8E?style=for-the-badge&logo=supabase&logoColor=white)
 ![Stripe](https://img.shields.io/badge/Stripe-635BFF?style=for-the-badge&logo=stripe&logoColor=white)
+![Jest](https://img.shields.io/badge/Jest-C21325?style=for-the-badge&logo=jest&logoColor=white)
 ![Git](https://img.shields.io/badge/Git-F05032?style=for-the-badge&logo=git&logoColor=white)
 ![GitHub](https://img.shields.io/badge/GitHub-181717?style=for-the-badge&logo=github&logoColor=white)
 ![Render](https://img.shields.io/badge/Render-46E3B7?style=for-the-badge&logo=render&logoColor=white)
@@ -61,6 +62,7 @@ https://github.com/user-attachments/assets/4ce10eb5-1856-4c1f-9277-5679358940be
 * Project Structure
 * Getting Started
 * Environment Variables
+* Testing
 * Deployment
 * Security
 * Known Limitations
@@ -91,6 +93,7 @@ This project was built to practice and demonstrate:
 * Cloud database management with Supabase
 * Environment variable management
 * Production deployment
+* Automated testing with Jest and Supertest
 
 ---
 
@@ -117,10 +120,11 @@ This project was built to practice and demonstrate:
 * ✅ Centralized error handling
 * ✅ Production deployment
 * ✅ Password recovery
+* ✅ Automated tests (Jest + Supertest)
 * ⏳ Admin dashboard
 * ⏳ Payment history
-* 
 
+aa
 ---
 
 # Technology Stack
@@ -131,6 +135,7 @@ This project was built to practice and demonstrate:
 | Backend         | Node.js, Express.js              |
 | Database        | Supabase (PostgreSQL)            |
 | Payments        | Stripe Checkout, Stripe Webhooks |
+| Testing         | Jest, Supertest                  |
 | Deployment      | Render                           |
 | Version Control | Git & GitHub                     |
 
@@ -177,13 +182,31 @@ Academia-com-Pagamentos/
 │   ├── supabase.js
 │   ├── index.html
 │   ├── login.html
+│   ├── redefinir-senha.html
+│   ├── redefinir-senha.js
 │   ├── minha-conta.html
 │   ├── sucesso.html
 │   ├── cancelado.html
 │   └── styles/
 │
+├── tests/
+│   ├── setupEnv.js
+│   ├── mocks/
+│   │   └── supabaseClientMock.js
+│   ├── unit/
+│   │   └── utils.test.js
+│   └── integration/
+│       ├── checkout.test.js
+│       ├── webhook.test.js
+│       └── minhaAssinatura.test.js
+│
+├── __mocks__/
+│   └── stripe.js
+│
 ├── server.js
 ├── supabaseClient.js
+├── utils.js
+├── jest.config.js
 ├── package.json
 ├── .env.example
 ├── .gitignore
@@ -231,6 +254,26 @@ BASE_URL=http://localhost:3000
 
 ---
 
+# Testing
+
+The project includes an automated test suite built with **Jest** and **Supertest**, covering both pure utility functions and the Express API routes.
+
+```bash
+npm test
+```
+
+What is covered:
+
+* **Unit tests** — pure functions such as e-mail validation and date arithmetic (`utils.js`)
+* **Authentication** — protected routes correctly reject requests with a missing or invalid Supabase JWT
+* **Input validation** — checkout requests with an invalid/missing plan are rejected
+* **Stripe webhook security** — requests without a valid signature are rejected, and handler failures correctly return `500` so Stripe retries delivery
+* **Data exposure** — confirms internal identifiers (e.g. `stripe_customer_id`) are never returned to the frontend
+
+Tests run fully offline: Stripe and Supabase are replaced with manual mocks (`__mocks__/stripe.js` and `tests/mocks/supabaseClientMock.js`), so no real API keys or network access are required to run the suite.
+
+---
+
 # Deployment
 
 The application is deployed on Render.
@@ -273,10 +316,10 @@ The project includes several security practices:
 * [x] Stripe Webhooks
 * [x] Subscription synchronization
 * [x] Production deployment
+* [x] Password recovery
+* [x] Automated tests
 * [ ] Admin dashboard
 * [ ] Payment history
-* [ ] Password recovery
-* [ ] Automated tests
 
 ---
 
