@@ -43,10 +43,9 @@ https://github.com/user-attachments/assets/4ce10eb5-1856-4c1f-9277-5679358940be
 <img src="https://img.shields.io/badge/Live-Demo-blue?style=for-the-badge">
 </a>
 
-<a href="(https://github.com/murilotecoteco/gym-membership-payments)">
-<img src="https://img.shields.io/badge/GitHub-Repository-black?style=for-the-badge">
+<a href="https://github.com/murilotecoteco/gym-membership-payments">
+  <img src="https://img.shields.io/badge/GitHub-Repository-black?style=for-the-badge">
 </a>
-
 </p>
 
 ---
