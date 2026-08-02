@@ -225,8 +225,8 @@ Academia-com-Pagamentos/
 ## Installation
 
 ```bash
-git clone https://github.com/murilotecoteco/Academia-com-Pagamentos.git
-cd Academia-com-Pagamentos
+git clone https://github.com/murilotecoteco/gym-membership-payments.git
+cd gym-membership-payments
 npm install
 npm start
 ```
