@@ -116,9 +116,10 @@ This project was built to practice and demonstrate:
 * ✅ Input validation
 * ✅ Centralized error handling
 * ✅ Production deployment
+* ✅ Password recovery
 * ⏳ Admin dashboard
 * ⏳ Payment history
-* ⏳ Password recovery
+* 
 
 ---
 
