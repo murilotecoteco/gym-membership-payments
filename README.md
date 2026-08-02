@@ -324,6 +324,4 @@ The project includes several security practices:
 
 # License
 
-This project was developed for educational purposes.
-
-No license has been applied.
+This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
