@@ -1,12 +1,54 @@
+/**
+ * server.js
+ * ==================================================================
+ * Servidor Express da aplicação Academia Toledo.
+ *
+ * Responsabilidades principais:
+ *  - Servir os arquivos estáticos do front-end (pasta /public)
+ *  - Criar sessões de pagamento (Stripe Checkout) para os planos de
+ *    assinatura disponíveis
+ *  - Processar webhooks do Stripe para manter o Supabase sincronizado
+ *    com o estado real das assinaturas e pagamentos (ativação,
+ *    renovação, cancelamento agendado/efetivo, falha de pagamento)
+ *  - Expor rotas autenticadas para o usuário consultar sua própria
+ *    assinatura e abrir o Portal do Cliente Stripe (autoatendimento:
+ *    troca de cartão, faturas, cancelamento)
+ *
+ * Autenticação: todas as rotas que expõem dados de um usuário
+ * específico validam o JWT emitido pelo Supabase Auth (ver
+ * middleware requireAuth), nunca confiando em identificadores
+ * enviados livremente pelo cliente no corpo da requisição.
+ *
+ * Fonte da verdade: sempre que possível, o estado gravado no Supabase
+ * é obtido consultando a API do Stripe no momento do processamento
+ * (em vez de confiar cegamente no payload do evento de webhook), pois
+ * o Stripe não garante ordem de entrega dos eventos — ver comentário
+ * detalhado em handleSubscriptionUpdated().
+ * ==================================================================
+ */
+
 require("dotenv").config();
 
+// Framework HTTP principal da aplicação.
 const express = require("express");
+// Utilitário nativo do Node para resolver caminhos de arquivo de forma
+// segura e independente do sistema operacional.
 const path = require("path");
+// SDK oficial do Stripe para Node.js (Checkout, Billing Portal, webhooks).
 const Stripe = require("stripe");
+// Middleware de segurança: define cabeçalhos HTTP recomendados
+// (CSP, HSTS, X-Frame-Options, etc.) para mitigar ataques comuns.
 const helmet = require("helmet");
+// Middleware de rate limiting, usado para proteger rotas sensíveis
+// (checkout e portal) contra abuso/spam de requisições.
 const rateLimit = require("express-rate-limit");
 
+// Cliente único do Supabase com privilégios de administrador
+// (Service Role Key) — ver supabaseClient.js.
 const supabase = require("./supabaseClient");
+// Funções puras reutilizáveis (validação de e-mail, aritmética de datas),
+// extraídas para utils.js para permitir testes unitários simples.
+const { isValidEmail, addOneMonth } = require("./utils");
 
 const app = express();
 
@@ -15,6 +57,8 @@ const app = express();
    ============================================================ */
 
 // Falha rápido e com erro claro no boot se faltar configuração essencial.
+// Preferível a deixar o servidor subir "pela metade" e só descobrir a
+// falta de uma chave quando o primeiro pagamento ou webhook chegar.
 const REQUIRED_ENV_VARS = ["STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET"];
 const missingEnvVars = REQUIRED_ENV_VARS.filter((key) => !process.env[key]);
 
@@ -23,6 +67,7 @@ if (missingEnvVars.length > 0) {
   process.exit(1);
 }
 
+// Instância do SDK do Stripe, autenticada com a Secret Key do projeto.
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 // URL base usada nos redirects do Checkout. Em produção, defina BASE_URL
@@ -64,26 +109,21 @@ const PLANS = {
   }
 };
 
-// Logger com formato consistente para facilitar debug em produção.
+/**
+ * Logger com formato consistente para facilitar leitura e busca em
+ * ferramentas de log de produção (ex.: painel do Render).
+ * Cada linha inclui timestamp ISO, um ícone indicando o nível e,
+ * quando fornecido, um objeto de metadados serializado em JSON.
+ *
+ * @param {"info"|"warn"|"error"|"success"} level
+ * @param {string} message - descrição curta do evento logado
+ * @param {object} [meta] - dados estruturados adicionais (ids, valores, etc.)
+ */
 function log(level, message, meta = {}) {
   const ts = new Date().toISOString();
   const icon = { info: "ℹ️", warn: "⚠️", error: "❌", success: "✅" }[level] || "";
   const metaStr = Object.keys(meta).length ? JSON.stringify(meta) : "";
   console.log(`[${ts}] ${icon} ${message} ${metaStr}`.trim());
-}
-
-// Validações de dados.
-function isValidEmail(email) {
-  return typeof email === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-}
-
-// Soma 1 mês a uma data. Usado apenas como FALLBACK do período de
-// cobrança, para o caso (raro) de falharmos ao buscar o período real
-// direto no Stripe — ver getBillingPeriod() abaixo.
-function addOneMonth(date) {
-  const result = new Date(date);
-  result.setMonth(result.getMonth() + 1);
-  return result;
 }
 
 /* ============================================================
@@ -95,6 +135,10 @@ function addOneMonth(date) {
  * (fonte da verdade real). Se a busca falhar por qualquer motivo (rede,
  * id ausente/inválido), cai para uma aproximação de 1 mês a partir do
  * timestamp do evento, em vez de travar a ativação por completo.
+ *
+ * @param {string} subscriptionId - ID da Subscription no Stripe (sub_xxx)
+ * @param {number} eventTimestampSec - timestamp Unix (segundos) do evento webhook, usado como base do fallback
+ * @returns {Promise<{periodStart: Date, periodEnd: Date}>}
  */
 async function getBillingPeriod(subscriptionId, eventTimestampSec) {
   try {
@@ -136,6 +180,25 @@ async function getBillingPeriod(subscriptionId, eventTimestampSec) {
  *
  * Requer constraint UNIQUE em subscriptions.user_id (uma linha por usuário).
  */
+/**
+ * Ativa (ou renova) a assinatura do usuário na tabela subscriptions.
+ *
+ * Idempotente: o período vem da própria Subscription do Stripe (ou, em
+ * fallback, do timestamp do EVENTO), nunca do horário em que o webhook
+ * é processado.
+ *
+ * Requer constraint UNIQUE em subscriptions.user_id (uma linha por usuário).
+ *
+ * @param {object} params
+ * @param {string} params.user_id - ID do usuário no Supabase Auth
+ * @param {string|null} params.plan - identificador do plano (mensal, trimestral, etc.)
+ * @param {string} params.sessionId - ID da Checkout Session que originou a assinatura
+ * @param {string|null} params.subscriptionId - ID da Subscription no Stripe
+ * @param {string|null} params.customerId - ID do Customer no Stripe
+ * @param {number} params.eventTimestampSec - timestamp Unix do evento webhook (usado no fallback do período)
+ * @returns {Promise<void>}
+ * @throws Repassa o erro do Supabase para que o webhook responda 500 e o Stripe reentregue o evento.
+ */
 async function activateSubscription({ user_id, plan, sessionId, subscriptionId, customerId, eventTimestampSec }) {
   const { periodStart, periodEnd } = await getBillingPeriod(subscriptionId, eventTimestampSec);
 
@@ -176,6 +239,12 @@ async function activateSubscription({ user_id, plan, sessionId, subscriptionId, 
 /**
  * Processa um evento checkout.session.completed: salva o pagamento (de
  * forma idempotente) e, se houver user_id, ativa a assinatura do usuário.
+ *
+ * @param {object} session - objeto Checkout Session (event.data.object)
+ * @param {string} eventId - ID do evento Stripe, usado apenas para correlação em logs
+ * @param {number} eventTimestampSec - timestamp Unix do evento, repassado a activateSubscription()
+ * @returns {Promise<void>}
+ * @throws Repassa erros do Supabase para que o webhook responda 500 e o Stripe reentregue o evento.
  */
 async function handleCheckoutCompleted(session, eventId, eventTimestampSec) {
   const sessionId = session.id;
@@ -493,11 +562,40 @@ async function handlePaymentFailed(invoice, eventId) {
    🔥 WEBHOOK (PRECISA VIR ANTES DE express.json())
    ============================================================ */
 
-// No Dashboard/CLI do Stripe, este endpoint precisa estar inscrito em:
-//   - checkout.session.completed
-//   - customer.subscription.deleted
-//   - customer.subscription.updated
-//   - invoice.payment_failed
+/**
+ * POST /webhook
+ *
+ * Endpoint de recebimento de eventos assíncronos do Stripe. É o
+ * mecanismo pelo qual o Supabase fica sincronizado com o que realmente
+ * acontece do lado do Stripe (pagamentos confirmados, cancelamentos,
+ * falhas de cobrança), independente de o usuário estar com o site
+ * aberto no navegador no momento em que o evento ocorre.
+ *
+ * IMPORTANTE — ordem dos middlewares: esta rota usa express.raw() em
+ * vez de express.json() e precisa ser registrada ANTES de
+ * app.use(express.json()) (ver seção MIDDLEWARE abaixo). A verificação
+ * de assinatura do Stripe (stripe.webhooks.constructEvent) exige o
+ * corpo da requisição em formato bruto (Buffer), byte a byte — se o
+ * Express já tivesse parseado o JSON antes, a assinatura não bateria
+ * e todo webhook seria rejeitado como inválido.
+ *
+ * Segurança: a validade do evento é garantida verificando a assinatura
+ * enviada no header "stripe-signature" contra o STRIPE_WEBHOOK_SECRET
+ * — sem isso, qualquer pessoa poderia forjar requisições simulando
+ * pagamentos ou cancelamentos falsos.
+ *
+ * Contrato de resposta com o Stripe: retornar status 500 faz o Stripe
+ * reentregar o mesmo evento automaticamente (com backoff), por isso
+ * os handlers abaixo propagam (throw) os erros de gravação no Supabase
+ * em vez de engoli-los — silenciar um erro aqui faria o evento ser
+ * dado como processado quando na verdade falhou.
+ *
+ * No Dashboard/CLI do Stripe, este endpoint precisa estar inscrito em:
+ *   - checkout.session.completed
+ *   - customer.subscription.deleted
+ *   - customer.subscription.updated
+ *   - invoice.payment_failed
+ */
 app.post(
   "/webhook",
   express.raw({ type: "application/json" }),
@@ -509,6 +607,10 @@ app.post(
       return res.status(400).send("Webhook Error: missing signature");
     }
 
+    // Verifica a assinatura e decodifica o payload em um evento Stripe
+    // confiável. Qualquer falha aqui (assinatura inválida, secret
+    // errado, corpo alterado) é tratada como requisição malformada/não
+    // autêntica — nunca processada.
     let event;
     try {
       event = stripe.webhooks.constructEvent(
@@ -524,6 +626,11 @@ app.post(
     try {
       log("info", "Evento Stripe recebido", { event_id: event.id, type: event.type });
 
+      // Roteamento por tipo de evento — cada handler é responsável por
+      // sua própria lógica de idempotência e persistência no Supabase.
+      // Tipos não listados aqui são deliberadamente ignorados (apenas
+      // logados), pois o endpoint está inscrito apenas nos eventos que
+      // a aplicação realmente precisa tratar.
       if (event.type === "checkout.session.completed") {
         await handleCheckoutCompleted(event.data.object, event.id, event.created);
       } else if (event.type === "customer.subscription.deleted") {
@@ -556,9 +663,13 @@ app.post(
    ============================================================ */
 
 // Segurança: cabeçalhos HTTP seguros (CSP, HSTS, X-Frame-Options, etc.)
+// via Helmet, com a Content Security Policy customizada para permitir
+// exatamente os domínios externos que o front-end realmente usa
+// (fontes do Google Fonts, SDK do Supabase via CDN, imagens de bancos
+// de imagem e do Google Maps) — evitando tanto bloquear recursos
+// legítimos quanto deixar a política liberal demais.
 app.use(
   helmet({
-    // Permite carregar fontes do Google Fonts e scripts do CDN do Supabase
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
@@ -587,13 +698,21 @@ app.use(
   })
 );
 
+// Parser de JSON para todas as rotas registradas a partir daqui —
+// deliberadamente após a rota /webhook, que precisa do corpo bruto
+// (ver comentário na definição do webhook acima).
 app.use(express.json());
+// Serve os arquivos estáticos do front-end (HTML, CSS, JS, imagens)
+// diretamente da pasta /public.
 app.use(express.static(path.join(__dirname, "public")));
 
 /* ============================================================
    🌍 ROTAS
    ============================================================ */
 
+// Rota raiz: serve a landing page estática. As demais páginas .html
+// (login, minha-conta, sucesso, cancelado) já são entregues diretamente
+// pelo middleware express.static configurado acima.
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "index.html"));
 });
@@ -608,6 +727,31 @@ const checkoutLimiter = rateLimit({
   message: { error: "Muitas requisições. Aguarde um momento e tente novamente." }
 });
 
+/**
+ * POST /create-checkout-session
+ *
+ * Cria uma Stripe Checkout Session para o plano solicitado e devolve
+ * a URL de redirecionamento para o front-end (auth.js chama esta rota
+ * e navega o navegador até session.url).
+ *
+ * Segurança:
+ *  - Exige um JWT válido do Supabase Auth no header Authorization
+ *    (Bearer token); user_id e e-mail são extraídos do token
+ *    verificado no servidor, nunca aceitos do corpo da requisição.
+ *  - O price_id do Stripe nunca é recebido do cliente — apenas um
+ *    identificador de plano (plan_id), validado contra a allowlist
+ *    PLANS definida no servidor. Isso impede que alguém manipule a
+ *    requisição para pagar um valor diferente do configurado.
+ *
+ * Body esperado: { plan_id: "mensal" | "trimestral" | "semestral" | "anual" }
+ *
+ * Respostas:
+ *  - 200 { url } — sessão criada com sucesso
+ *  - 400 — plan_id ausente ou inválido
+ *  - 401 — token ausente/inválido
+ *  - 503 — plano válido mas sem price_id configurado no .env
+ *  - 500 — erro inesperado ao criar a sessão no Stripe
+ */
 app.post("/create-checkout-session", checkoutLimiter, async (req, res) => {
   try {
     // ---------------------------------------------------------------
@@ -715,8 +859,21 @@ app.post("/create-checkout-session", checkoutLimiter, async (req, res) => {
 // conforme configurado no Dashboard do Stripe > Portal do cliente).
 // ---------------------------------------------------------------
 
-// Middleware simples de autenticação por JWT do Supabase, reaproveitado
-// pelas rotas de conta/assinatura abaixo.
+/**
+ * Middleware de autenticação por JWT do Supabase, reaproveitado pelas
+ * rotas de conta/assinatura abaixo (GET /minha-assinatura e
+ * POST /create-portal-session).
+ *
+ * Extrai o token do header "Authorization: Bearer <token>", valida
+ * junto ao Supabase Auth e, em caso de sucesso, injeta o usuário
+ * autenticado em req.user para uso pelo handler da rota. Responde
+ * 401 diretamente e interrompe a cadeia caso o token esteja ausente
+ * ou seja inválido/expirado.
+ *
+ * @param {import("express").Request} req
+ * @param {import("express").Response} res
+ * @param {import("express").NextFunction} next
+ */
 async function requireAuth(req, res, next) {
   const authHeader = req.headers.authorization || "";
   const token = authHeader.replace("Bearer ", "").trim();
@@ -736,6 +893,10 @@ async function requireAuth(req, res, next) {
   next();
 }
 
+// Rate limit: máximo 10 tentativas por minuto por IP nas rotas de
+// conta/portal — mesmo raciocínio do checkoutLimiter, mas aplicado
+// apenas à criação de sessões do Portal do Cliente (POST, mais sensível
+// por criar uma sessão autenticada no Stripe a cada chamada).
 const portalLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 10,
@@ -744,8 +905,23 @@ const portalLimiter = rateLimit({
   message: { error: "Muitas requisições. Aguarde um momento e tente novamente." }
 });
 
-// Retorna os dados da assinatura do usuário logado, para exibir na
-// tela "Minha Conta" (plano, status, próxima cobrança/cancelamento).
+/**
+ * GET /minha-assinatura
+ *
+ * Retorna os dados da assinatura do usuário autenticado (plano, status,
+ * data da próxima cobrança ou de cancelamento, e se há um cancelamento
+ * agendado), para exibição na tela "Minha Conta" (conta.js).
+ *
+ * Requer autenticação (middleware requireAuth). O stripe_customer_id é
+ * deliberadamente removido da resposta antes de enviá-la ao front-end —
+ * é um identificador interno do Stripe sem utilidade para o usuário e
+ * que não deve ser exposto desnecessariamente no cliente.
+ *
+ * Respostas:
+ *  - 200 { plan, status, current_period_end, canceled_at, cancel_at_period_end }
+ *  - 404 — usuário autenticado, porém sem nenhuma assinatura registrada
+ *  - 500 — erro ao consultar o Supabase
+ */
 app.get("/minha-assinatura", requireAuth, async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -772,8 +948,25 @@ app.get("/minha-assinatura", requireAuth, async (req, res) => {
   }
 });
 
-// Cria uma sessão do Portal do Cliente Stripe e devolve a URL para
-// o frontend redirecionar o usuário até lá.
+/**
+ * POST /create-portal-session
+ *
+ * Cria uma sessão do Stripe Billing Portal para o usuário autenticado
+ * e devolve a URL de redirecionamento (conta.js navega o navegador até
+ * essa URL). Dentro do Portal, o usuário pode trocar cartão, ver/baixar
+ * faturas, atualizar dados cadastrais e cancelar a assinatura — o
+ * comportamento exato do cancelamento (imediato ou no fim do período)
+ * é configurado no Dashboard do Stripe, não neste código.
+ *
+ * Requer autenticação (middleware requireAuth) e que o usuário já
+ * possua um stripe_customer_id salvo (ou seja, já tenha assinado ao
+ * menos uma vez).
+ *
+ * Respostas:
+ *  - 200 { url }
+ *  - 404 — usuário sem assinatura/stripe_customer_id registrado
+ *  - 500 — erro ao consultar o Supabase ou criar a sessão no Stripe
+ */
 app.post("/create-portal-session", portalLimiter, requireAuth, async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -820,18 +1013,40 @@ app.post("/create-portal-session", portalLimiter, requireAuth, async (req, res) 
    🛑 INICIALIZAÇÃO
    ============================================================ */
 
-// Rede de segurança global — evita que um erro não tratado derrube o processo.
+// Rede de segurança global contra promises rejeitadas sem .catch —
+// apenas loga o erro, sem derrubar o processo, pois um unhandledRejection
+// isolado normalmente não compromete a integridade do restante da
+// aplicação (diferente de uncaughtException, abaixo).
 process.on("unhandledRejection", (reason) => {
   log("error", "unhandledRejection", { reason: reason?.message || String(reason) });
 });
 
+// Erros síncronos não capturados deixam o processo em estado
+// potencialmente inconsistente — por isso, diferente do handler acima,
+// aqui se opta por encerrar o processo (process.exit) após logar,
+// confiando que a plataforma de hospedagem (ex.: Render) reinicie o
+// serviço automaticamente, em vez de manter um processo comprometido no ar.
 process.on("uncaughtException", (err) => {
   log("error", "uncaughtException — encerrando processo", { error: err.message });
   process.exit(1);
 });
 
+// Porta configurável via variável de ambiente PORT — necessário em
+// plataformas de hospedagem (Render, Heroku, etc.) que atribuem a
+// porta dinamicamente; localmente cai no padrão 3000.
 const PORT = process.env.PORT || 3000;
 
-app.listen(PORT, () => {
-  console.log(`Servidor rodando na porta ${PORT}`);
-});
+// Só sobe o servidor de verdade (ocupando uma porta) quando este arquivo
+// é executado diretamente (`node server.js` / `npm start`). Quando é
+// importado por outro módulo — como os testes de integração em
+// tests/integration/*.test.js, via Supertest — apenas o `app` exportado
+// abaixo é usado, sem escutar nenhuma porta.
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Servidor rodando na porta ${PORT}`);
+  });
+}
+
+// Exportado para os testes de integração (Supertest usa isso para simular
+// requisições HTTP sem precisar de um servidor real escutando uma porta).
+module.exports = app;
