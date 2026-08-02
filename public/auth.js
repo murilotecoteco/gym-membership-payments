@@ -30,6 +30,20 @@ const btnLogin = document.getElementById("btn-login");
 const btnGetUser = document.getElementById("btn-getuser");
 const btnLogout = document.getElementById("btn-logout");
 
+// Recuperação de senha
+const authBox = document.querySelector(".auth-box");
+const recoveryBox = document.getElementById("recovery-box");
+const recoveryEmailInput = document.getElementById("recovery-email");
+const linkForgotPassword = document.getElementById("link-forgot-password");
+const btnSendRecovery = document.getElementById("btn-send-recovery");
+const btnBackToLogin = document.getElementById("btn-back-to-login");
+
+// URL para onde o Supabase redireciona o usuário após clicar no link do
+// e-mail de recuperação. Essa URL precisa estar cadastrada em Supabase >
+// Authentication > URL Configuration > Redirect URLs, senão o Supabase
+// recusa o redirecionamento.
+const REDIRECT_RESET_PASSWORD = `${window.location.origin}/redefinir-senha.html`;
+
 // Tamanho mínimo de senha — deve ser igual ou maior que o mínimo
 // configurado em Supabase > Authentication > Policies (padrão: 6).
 const MIN_PASSWORD_LENGTH = 6;
@@ -137,6 +151,16 @@ async function getCurrentUser(silent = false) {
    AUTENTICAÇÃO — cadastro, login, logout e verificação
    ============================================================ */
 
+/**
+ * Cria uma nova conta de usuário via Supabase Auth (e-mail + senha).
+ *
+ * Se o projeto Supabase estiver configurado sem confirmação de e-mail
+ * obrigatória, o cadastro já retorna com sessão ativa — nesse caso, se
+ * o usuário veio do clique em um plano (ver getPendingPlan), o fluxo de
+ * pagamento é retomado automaticamente, sem exigir um novo clique.
+ *
+ * @returns {Promise<void>}
+ */
 async function registerUser() {
   const creds = getCredentials();
   if (!creds) return;
@@ -170,6 +194,15 @@ async function registerUser() {
   setStatus("Conta criada com sucesso!", "success");
 }
 
+/**
+ * Autentica um usuário existente via Supabase Auth (e-mail + senha).
+ *
+ * Assim como em registerUser, se o login foi originado por um clique
+ * em um plano (usuário não estava logado e foi redirecionado para cá),
+ * a compra pendente é retomada automaticamente após o login bem-sucedido.
+ *
+ * @returns {Promise<void>}
+ */
 async function loginUser() {
   const creds = getCredentials();
   if (!creds) return;
@@ -201,6 +234,11 @@ async function loginUser() {
   setStatus("Login realizado!", "success");
 }
 
+/**
+ * Encerra a sessão do usuário atual (Supabase Auth signOut).
+ *
+ * @returns {Promise<void>}
+ */
 async function logoutUser() {
   // Usa getCurrentUser para confirmar que existe sessão antes de sair,
   // evitando uma chamada de signOut desnecessária quando já não há usuário.
@@ -231,6 +269,76 @@ async function showCurrentUser() {
   if (!user) return; // getCurrentUser já exibiu o status de erro
 
   setStatus(`Logado: ${user.email}`, "success");
+}
+
+/* ============================================================
+   RECUPERAÇÃO DE SENHA — envio do e-mail de redefinição
+   ============================================================ */
+
+/**
+ * Alterna a exibição entre o formulário de login/cadastro e o
+ * formulário de recuperação de senha, dentro do mesmo cartão (.auth-box).
+ *
+ * @param {boolean} showRecovery - true para mostrar o bloco de recuperação
+ */
+function toggleRecoveryView(showRecovery) {
+  if (!authBox || !recoveryBox) return;
+
+  authBox.classList.toggle("recovery-active", showRecovery);
+  recoveryBox.classList.toggle("active", showRecovery);
+
+  // Limpa o status ao trocar de tela, para não misturar mensagens
+  // de um formulário com o outro.
+  setStatus("");
+
+  if (showRecovery && recoveryEmailInput && emailInput) {
+    // Pré-preenche o e-mail de recuperação com o que já foi digitado
+    // no formulário de login, se houver, poupando o usuário de digitar de novo.
+    recoveryEmailInput.value = emailInput.value.trim();
+    recoveryEmailInput.focus();
+  }
+}
+
+/**
+ * Envia o e-mail de recuperação de senha via Supabase Auth.
+ *
+ * O Supabase envia um link para o e-mail informado; ao clicar, o usuário
+ * é levado para REDIRECT_RESET_PASSWORD (redefinir-senha.html) já com uma
+ * sessão temporária de recuperação, usada para definir a nova senha.
+ *
+ * Por segurança, o Supabase não informa se o e-mail existe ou não na
+ * base — por isso a mensagem de sucesso é sempre genérica.
+ *
+ * @returns {Promise<void>}
+ */
+async function requestPasswordReset() {
+  const email = recoveryEmailInput?.value?.trim();
+
+  if (!email) {
+    setStatus("Informe seu e-mail para recuperar a senha.", "error");
+    return;
+  }
+
+  if (!EMAIL_REGEX.test(email)) {
+    setStatus("Informe um e-mail válido.", "error");
+    return;
+  }
+
+  setStatus("Enviando link de recuperação...");
+
+  const { error } = await supabase.auth.resetPasswordForEmail(email, {
+    redirectTo: REDIRECT_RESET_PASSWORD
+  });
+
+  if (error) {
+    setStatus("Erro ao enviar link de recuperação: " + error.message, "error");
+    return;
+  }
+
+  setStatus(
+    "Se este e-mail estiver cadastrado, você receberá um link para redefinir sua senha. Verifique também a caixa de spam.",
+    "success"
+  );
 }
 
 /* ============================================================
@@ -333,6 +441,16 @@ btnRegister?.addEventListener("click", registerUser);
 btnLogin?.addEventListener("click", loginUser);
 btnGetUser?.addEventListener("click", showCurrentUser);
 btnLogout?.addEventListener("click", logoutUser);
+
+linkForgotPassword?.addEventListener("click", (e) => {
+  e.preventDefault();
+  toggleRecoveryView(true);
+});
+btnBackToLogin?.addEventListener("click", (e) => {
+  e.preventDefault();
+  toggleRecoveryView(false);
+});
+btnSendRecovery?.addEventListener("click", requestPasswordReset);
 
 // Avisa o usuário, já ao carregar a página, por que ele caiu na tela de
 // login — caso tenha vindo de um clique em um plano (ver getPendingPlan).
