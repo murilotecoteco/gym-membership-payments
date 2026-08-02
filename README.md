@@ -7,7 +7,7 @@
 <p align="center">
 
 ![Status](https://img.shields.io/badge/status-in%20production-blue)
-
+[![CI](https://github.com/murilotecoteco/gym-membership-payments/actions/workflows/ci.yml/badge.svg)](https://github.com/murilotecoteco/gym-membership-payments/actions/workflows/ci.yml)
 
 </p>
 
@@ -106,6 +106,7 @@ This project was built to practice and demonstrate:
 <p align="center">
 <img width="1117" height="907" alt="image" src="https://github.com/user-attachments/assets/8c356aaa-414e-43ad-93e1-413af0abd0c4" />
 </p>
+
 ---
 
 # Features
@@ -125,20 +126,21 @@ This project was built to practice and demonstrate:
 * ⏳ Admin dashboard
 * ⏳ Payment history
 
-
 ---
 
 # Technology Stack
 
 | Layer           | Technology                       |
 | --------------- | -------------------------------- |
-| Frontend        | HTML5, CSS3, JavaScript          |
+| Frontend        | HTML5, CSS3, vanilla JavaScript  |
 | Backend         | Node.js, Express.js              |
 | Database        | Supabase (PostgreSQL)            |
 | Payments        | Stripe Checkout, Stripe Webhooks |
 | Testing         | Jest, Supertest                  |
 | Deployment      | Render                           |
 | Version Control | Git & GitHub                     |
+
+> **Note on frontend:** The frontend is intentionally implemented in vanilla JavaScript — no framework was used — to keep the focus on backend development, payment integration, and automated testing, which are the main goals of this project.
 
 ---
 
@@ -174,6 +176,10 @@ The application follows a client-server architecture. The frontend communicates 
 
 ```text
 Academia-com-Pagamentos/
+│
+├── .github/
+│   └── workflows/
+│       └── ci.yml
 │
 ├── public/
 │   ├── auth.js

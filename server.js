@@ -42,6 +42,11 @@ const helmet = require("helmet");
 // Middleware de rate limiting, usado para proteger rotas sensíveis
 // (checkout e portal) contra abuso/spam de requisições.
 const rateLimit = require("express-rate-limit");
+// Logger estruturado: emite JSON em produção (ideal para plataformas como
+// Render) e texto formatado em desenvolvimento (via pino-pretty).
+const pino = require("pino");
+// Validação declarativa de schema nos bodies das requisições.
+const { z } = require("zod");
 
 // Cliente único do Supabase com privilégios de administrador
 // (Service Role Key) — ver supabaseClient.js.
@@ -110,21 +115,51 @@ const PLANS = {
 };
 
 /**
- * Logger com formato consistente para facilitar leitura e busca em
- * ferramentas de log de produção (ex.: painel do Render).
- * Cada linha inclui timestamp ISO, um ícone indicando o nível e,
- * quando fornecido, um objeto de metadados serializado em JSON.
+ * Logger estruturado usando Pino.
+ *
+ * Em produção (NODE_ENV=production) emite uma linha JSON por evento —
+ * formato ideal para ferramentas de observabilidade (Render, Datadog, etc.).
+ * Em outros ambientes usa pino-pretty para saída legível no terminal.
+ *
+ * Pino não possui nível "success"; chamadas antigas com esse nível são
+ * mapeadas para logger.info com { success: true } nos metadados.
+ */
+const logger = pino({
+  level: process.env.LOG_LEVEL || "info",
+  ...(process.env.NODE_ENV !== "production" && {
+    transport: { target: "pino-pretty", options: { colorize: true } }
+  })
+});
+
+/**
+ * Wrapper de compatibilidade sobre o Pino, mantendo a assinatura
+ * log(level, message, meta) usada em todo o servidor.
  *
  * @param {"info"|"warn"|"error"|"success"} level
  * @param {string} message - descrição curta do evento logado
  * @param {object} [meta] - dados estruturados adicionais (ids, valores, etc.)
  */
 function log(level, message, meta = {}) {
-  const ts = new Date().toISOString();
-  const icon = { info: "ℹ️", warn: "⚠️", error: "❌", success: "✅" }[level] || "";
-  const metaStr = Object.keys(meta).length ? JSON.stringify(meta) : "";
-  console.log(`[${ts}] ${icon} ${message} ${metaStr}`.trim());
+  if (level === "success") {
+    logger.info({ ...meta, success: true }, message);
+  } else if (level === "info" || level === "warn" || level === "error") {
+    logger[level](meta, message);
+  } else {
+    logger.info(meta, message);
+  }
 }
+
+/**
+ * Schema Zod para o body de POST /create-checkout-session.
+ * Valida que plan_id está presente e é um dos planos conhecidos,
+ * emitindo mensagens de erro claras caso contrário.
+ */
+const checkoutBodySchema = z.object({
+  plan_id: z.enum(["mensal", "trimestral", "semestral", "anual"], {
+    required_error: "plan_id é obrigatório.",
+    invalid_type_error: "plan_id deve ser uma string."
+  })
+});
 
 /* ============================================================
    💾 LÓGICA DE NEGÓCIO
@@ -783,13 +818,19 @@ app.post("/create-checkout-session", checkoutLimiter, async (req, res) => {
     // O price_id nunca vem do body — apenas o nome do plano,
     // e o servidor resolve o price_id correspondente.
     // ---------------------------------------------------------------
-    const { plan_id } = req.body ?? {};
+    // Valida o body com Zod antes de qualquer acesso às propriedades.
+    // safeParse nunca lança exceção — erros ficam em result.error.
+    const bodyResult = checkoutBodySchema.safeParse(req.body ?? {});
 
-    if (!plan_id || !PLANS[plan_id]) {
+    if (!bodyResult.success) {
+      const issues = bodyResult.error.issues ?? bodyResult.error.errors ?? [];
+      const messages = issues.map((e) => e.message).join(" ");
       return res.status(400).json({
-        error: `Plano inválido. Escolha um de: ${Object.keys(PLANS).join(", ")}.`
+        error: `Plano inválido. Escolha um de: ${Object.keys(PLANS).join(", ")}. (${messages})`
       });
     }
+
+    const { plan_id } = bodyResult.data;
 
     const plan = PLANS[plan_id];
 
@@ -1043,7 +1084,7 @@ const PORT = process.env.PORT || 3000;
 // abaixo é usado, sem escutar nenhuma porta.
 if (require.main === module) {
   app.listen(PORT, () => {
-    console.log(`Servidor rodando na porta ${PORT}`);
+    logger.info({ port: PORT }, `Servidor rodando na porta ${PORT}`);
   });
 }
 

@@ -1,0 +1,42 @@
+# Workflow de CI — roda `npm test` a cada push/PR na branch main.
+#
+# Os testes usam mocks manuais para Stripe e Supabase (ver __mocks__/stripe.js
+# e tests/mocks/supabaseClientMock.js), portanto não precisam de chaves reais —
+# as variáveis de ambiente abaixo são dummies suficientes para o servidor
+# inicializar sem process.exit(1) (mesmo padrão de tests/setupEnv.js).
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Run test suite
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+        env:
+          STRIPE_SECRET_KEY: sk_test_dummy_ci
+          STRIPE_WEBHOOK_SECRET: whsec_dummy_ci
+          SUPABASE_URL: https://dummy.supabase.co
+          SUPABASE_SERVICE_KEY: dummy_service_key
+          BASE_URL: http://localhost:3000
+          NODE_ENV: test
