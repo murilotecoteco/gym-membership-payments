@@ -103,7 +103,9 @@ This project was built to practice and demonstrate:
 <p align="center">
   <img src="https://github.com/user-attachments/assets/04f53cd0-359e-4431-a6d5-3d3d1c62b14f" alt="Academia com Pagamentos">
 </p>
-
+<p align="center">
+<img width="1117" height="907" alt="image" src="https://github.com/user-attachments/assets/8c356aaa-414e-43ad-93e1-413af0abd0c4" />
+</p>
 ---
 
 # Features
