@@ -18,6 +18,7 @@
 ![JavaScript](https://img.shields.io/badge/JavaScript-F7DF1E?style=for-the-badge&logo=javascript&logoColor=black)
 ![Node.js](https://img.shields.io/badge/Node.js-339933?style=for-the-badge&logo=nodedotjs&logoColor=white)
 ![Express](https://img.shields.io/badge/Express-000000?style=for-the-badge&logo=express&logoColor=white)
+![Zod](https://img.shields.io/badge/Zod-3E67B1?style=for-the-badge&logo=zod&logoColor=white)
 ![Supabase](https://img.shields.io/badge/Supabase-3ECF8E?style=for-the-badge&logo=supabase&logoColor=white)
 ![Stripe](https://img.shields.io/badge/Stripe-635BFF?style=for-the-badge&logo=stripe&logoColor=white)
 ![Jest](https://img.shields.io/badge/Jest-C21325?style=for-the-badge&logo=jest&logoColor=white)
@@ -77,7 +78,7 @@ Academia com Pagamentos is a full-stack web application that simulates a gym mem
 
 Users can create an account, subscribe to a monthly plan through Stripe Checkout, and have their membership status automatically synchronized using Stripe Webhooks and Supabase.
 
-The project demonstrates backend development, payment processing, authentication, database integration and deployment in a production environment.
+The project demonstrates backend development, payment processing, authentication, security middleware, structured logging, input validation, and deployment in a production environment.
 
 ---
 
@@ -86,11 +87,14 @@ The project demonstrates backend development, payment processing, authentication
 This project was built to practice and demonstrate:
 
 * REST API development with Express
-* User authentication
+* User authentication with JWT validation
 * Stripe Checkout integration
-* Stripe Webhooks
+* Stripe Webhooks with signature verification and idempotent processing
 * Secure payment processing
 * Cloud database management with Supabase
+* Input validation with Zod
+* Structured logging with Pino
+* Security middleware with Helmet and rate limiting
 * Environment variable management
 * Production deployment
 * Automated testing with Jest and Supertest
@@ -115,12 +119,15 @@ This project was built to practice and demonstrate:
 * ✅ User registration and authentication
 * ✅ User account management
 * ✅ Stripe Checkout integration
-* ✅ Stripe Webhooks
-* ✅ Automatic subscription activation
-* ✅ Automatic subscription cancellation
+* ✅ Stripe Webhooks (activation, renewal, cancellation, payment failure)
+* ✅ Automatic subscription activation and cancellation
+* ✅ Stripe Billing Portal (card management, invoices, self-service cancellation)
 * ✅ Supabase database integration
-* ✅ Input validation
+* ✅ Input validation with Zod
 * ✅ Centralized error handling
+* ✅ Rate limiting on sensitive routes
+* ✅ Structured logging with Pino
+* ✅ Security headers with Helmet
 * ✅ Production deployment
 * ✅ Password recovery
 * ✅ Automated tests (Jest + Supertest)
@@ -131,17 +138,20 @@ This project was built to practice and demonstrate:
 
 # Technology Stack
 
-| Layer           | Technology                       |
-| --------------- | -------------------------------- |
-| Frontend        | HTML5, CSS3, vanilla JavaScript  |
-| Backend         | Node.js, Express.js              |
-| Database        | Supabase (PostgreSQL)            |
-| Payments        | Stripe Checkout, Stripe Webhooks |
-| Testing         | Jest, Supertest                  |
-| Deployment      | Render                           |
-| Version Control | Git & GitHub                     |
+| Layer | Technology |
+| --- | --- |
+| Frontend | HTML5, CSS3, vanilla JavaScript |
+| Backend | Node.js, Express.js |
+| Validation | Zod |
+| Logging | Pino |
+| Security | Helmet, express-rate-limit |
+| Database | Supabase (PostgreSQL) |
+| Payments | Stripe Checkout, Stripe Webhooks, Stripe Billing Portal |
+| Testing | Jest, Supertest |
+| Deployment | Render |
+| Version Control | Git & GitHub |
 
-> **Note on frontend:** The frontend is intentionally implemented in vanilla JavaScript — no framework was used — to keep the focus on backend development, payment integration, and automated testing, which are the main goals of this project.
+> **Note on frontend:** The frontend is intentionally implemented in vanilla JavaScript — no framework was used — to keep the focus on backend development, payment integration, security, and automated testing, which are the main goals of this project.
 
 ---
 
@@ -255,6 +265,10 @@ Create a `.env` file in the project root.
 ```env
 STRIPE_SECRET_KEY=
 STRIPE_WEBHOOK_SECRET=
+STRIPE_PRICE_MENSAL=
+STRIPE_PRICE_TRIMESTRAL=
+STRIPE_PRICE_SEMESTRAL=
+STRIPE_PRICE_ANUAL=
 SUPABASE_URL=
 SUPABASE_SERVICE_KEY=
 BASE_URL=http://localhost:3000
@@ -274,8 +288,8 @@ What is covered:
 
 * **Unit tests** — pure functions such as e-mail validation and date arithmetic (`utils.js`)
 * **Authentication** — protected routes correctly reject requests with a missing or invalid Supabase JWT
-* **Input validation** — checkout requests with an invalid/missing plan are rejected
-* **Stripe webhook security** — requests without a valid signature are rejected, and handler failures correctly return `500` so Stripe retries delivery
+* **Input validation** — checkout requests with an invalid or missing `plan_id` are rejected with 400
+* **Stripe webhook security** — requests without a valid signature are rejected with 400; handler failures return 500 so Stripe retries delivery
 * **Data exposure** — confirms internal identifiers (e.g. `stripe_customer_id`) are never returned to the frontend
 
 Tests run fully offline: Stripe and Supabase are replaced with manual mocks (`__mocks__/stripe.js` and `tests/mocks/supabaseClientMock.js`), so no real API keys or network access are required to run the suite.
@@ -284,28 +298,13 @@ Tests run fully offline: Stripe and Supabase are replaced with manual mocks (`__
 
 # Test Cards (Stripe)
 
-Stripe Checkout runs in **test mode** on this project, so no real payment is ever processed. Use any of the cards below to simulate a successful checkout flow — enter any future expiration date and any CVC of the required length (or leave it blank if the field is skipped by autofill).
+Stripe Checkout runs in **test mode** on this project, so no real payment is ever processed. Use any of the cards below to simulate a successful checkout flow — enter any future expiration date and any CVC of the required length.
 
-| Brand                              | Number               | CVC             | Expiration Date  |
-| ----------------------------------- | --------------------- | --------------- | ----------------- |
-| Visa                                 | 4242424242424242      | Any 3 digits     | Any future date    |
-| Visa (debit)                        | 4000056655665556      | Any 3 digits     | Any future date    |
-| Mastercard                          | 5555555555554444      | Any 3 digits     | Any future date    |
-| Mastercard (2-series)               | 2223003122003222      | Any 3 digits     | Any future date    |
-| Mastercard (debit)                  | 5200828282828210      | Any 3 digits     | Any future date    |
-| Mastercard (prepaid)                | 5105105105105100      | Any 3 digits     | Any future date    |
-| American Express                    | 378282246310005       | Any 4 digits     | Any future date    |
-| American Express                    | 371449635398431       | Any 4 digits     | Any future date    |
-| Discover                            | 6011111111111117      | Any 3 digits     | Any future date    |
-| Discover                            | 6011000990139424      | Any 3 digits     | Any future date    |
-| Discover (debit)                    | 6011981111111113      | Any 3 digits     | Any future date    |
-| Diners Club                         | 3056930009020004      | Any 3 digits     | Any future date    |
-| Diners Club (14-digit card)         | 36227206271667        | Any 3 digits     | Any future date    |
-| BCcard and DinaCard                 | 6555900000604105      | Any 3 digits     | Any future date    |
-| JCB                                  | 3566002020360505      | Any 3 digits     | Any future date    |
-| UnionPay                            | 6200000000000005      | Any 3 digits     | Any future date    |
-| UnionPay (debit)                    | 6200000000000047      | Any 3 digits     | Any future date    |
-| UnionPay (19-digit card)            | 6205500000000000004   | Any 3 digits     | Any future date    |
+| Brand | Number | CVC | Expiration Date |
+| --- | --- | --- | --- |
+| Visa | 4242424242424242 | Any 3 digits | Any future date |
+| Mastercard | 5555555555554444 | Any 3 digits | Any future date |
+| American Express | 378282246310005 | Any 4 digits | Any future date |
 
 > Full reference, including cards for testing declines and specific error codes: [Stripe Testing Docs](https://docs.stripe.com/testing?locale=pt-BR)
 
@@ -329,13 +328,16 @@ https://academia-com-pagamentos.onrender.com
 
 The project includes several security practices:
 
-* Validation of environment variables
-* Stripe webhook signature verification
-* Idempotent webhook processing
-* Server-side payment validation
-* Centralized error handling
-* Sensitive credentials stored as environment variables
-* `.env` excluded from version control
+* Validation of environment variables at startup (fails fast if any are missing)
+* JWT validation on all authenticated routes — `user_id` is always read from the verified token, never from the request body
+* `plan_id` validated against a server-side allowlist — the Stripe `price_id` is never exposed to or accepted from the client
+* Stripe webhook signature verification via `stripe.webhooks.constructEvent`
+* Idempotent webhook processing with `upsert` and `ignoreDuplicates`
+* Fetch-from-Stripe strategy on `subscription.updated` to avoid out-of-order event processing
+* Rate limiting on checkout and portal routes (10 req/min per IP)
+* Security headers via Helmet with a custom Content Security Policy
+* Structured logging with Pino (JSON in production, formatted in development)
+* Sensitive credentials stored as environment variables, excluded from version control
 
 ---
 
@@ -351,7 +353,12 @@ The project includes several security practices:
 * [x] User authentication
 * [x] Stripe Checkout
 * [x] Stripe Webhooks
+* [x] Stripe Billing Portal
 * [x] Subscription synchronization
+* [x] Rate limiting
+* [x] Structured logging
+* [x] Security headers
+* [x] Input validation with Zod
 * [x] Production deployment
 * [x] Password recovery
 * [x] Automated tests
