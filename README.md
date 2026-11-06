@@ -183,6 +183,44 @@ The application follows a client-server architecture. The frontend communicates 
 
 ---
 
+# Payment Flow and Test Environment
+
+## How the webhook works
+
+1. The user selects a plan and the backend creates a Stripe Checkout Session using a server-side price allowlist.
+2. Stripe completes the checkout and sends an event to the Express webhook endpoint.
+3. The backend validates the `Stripe-Signature` header with `STRIPE_WEBHOOK_SECRET`.
+4. Only after signature validation does the application process the event and synchronize the membership in Supabase.
+5. Webhook processing is idempotent, so repeated deliveries do not create duplicate subscription state.
+6. Events such as subscription updates, cancellations and payment failures keep the local membership status consistent with Stripe.
+
+The application treats Stripe webhooks as the source of truth for subscription state. A browser redirect after checkout is not considered proof of payment.
+
+## How payments are protected
+
+- Stripe secret keys, price IDs and the webhook secret exist only in server environment variables.
+- The frontend sends a logical `plan_id`; the backend maps it to an approved Stripe Price ID.
+- Webhook signatures are verified before the request body is trusted.
+- Authenticated routes derive the user identity from the verified Supabase JWT, never from a client-provided `user_id`.
+- Checkout and billing portal routes use rate limiting.
+- Sensitive fields such as `stripe_customer_id` are not returned to the browser.
+- Automated tests use mocks and do not call real Stripe or Supabase services.
+
+## Test environment
+
+The repository is configured for Stripe **test mode**. Test cards simulate payments without charging a real card; see [Stripe's testing documentation](https://docs.stripe.com/testing?locale=pt-BR). Local tests run offline with Jest, Supertest, a mocked Stripe client and a mocked Supabase client.
+
+For local webhook testing, configure a test-mode `STRIPE_WEBHOOK_SECRET` supplied by Stripe CLI or the selected test integration. Never use a live-mode secret in development or automated tests.
+
+## Data and production limitations
+
+- The users, memberships, plans and transactions used in the demo are fictitious or test data; do not use the project as a source of real financial or personal records.
+- The live demo is not a production payment service. A real deployment requires operational monitoring, secret rotation, backups, fraud controls, webhook alerting and a documented incident process.
+- The Supabase free tier may pause the database after inactivity, causing the first request after a pause to be slow or temporarily unavailable.
+- The free tier also has quotas and limits that are not suitable for guaranteed production availability or high transaction volume.
+
+---
+
 # Project Structure
 
 ```text
