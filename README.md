@@ -2,6 +2,8 @@
 
 Projeto prático full stack para estudar planos de academia e assinaturas recorrentes com Stripe, Express e Supabase.
 
+> Demo educacional com dados fictícios e Stripe em test mode. Não é um serviço de pagamentos pronto para produção nem uma apresentação comercial.
+
 [![Status](https://img.shields.io/badge/status-demo-blue)](https://github.com/murilotecoteco/gym-membership-payments)
 [![CI](https://github.com/murilotecoteco/gym-membership-payments/actions/workflows/ci.yml/badge.svg)](https://github.com/murilotecoteco/gym-membership-payments/actions/workflows/ci.yml)
 
