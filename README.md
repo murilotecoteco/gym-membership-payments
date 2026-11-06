@@ -1,13 +1,13 @@
 # Academia com Pagamentos
 
-Aplicação full stack para gerenciamento de planos de academia e assinaturas recorrentes com Stripe, Express e Supabase.
+Projeto prático full stack para estudar planos de academia e assinaturas recorrentes com Stripe, Express e Supabase.
 
 [![Status](https://img.shields.io/badge/status-demo-blue)](https://github.com/murilotecoteco/gym-membership-payments)
 [![CI](https://github.com/murilotecoteco/gym-membership-payments/actions/workflows/ci.yml/badge.svg)](https://github.com/murilotecoteco/gym-membership-payments/actions/workflows/ci.yml)
 
 [Live Demo](https://academia-com-pagamentos.onrender.com) · [Código-fonte](https://github.com/murilotecoteco/gym-membership-payments)
 
-## O que o projeto demonstra
+## O que foi praticado
 
 - Cadastro, autenticação e gerenciamento de conta
 - Stripe Checkout e Billing Portal
@@ -36,6 +36,11 @@ O redirecionamento do navegador após o checkout não é considerado prova de pa
 - Checkout e Billing Portal possuem rate limiting.
 - Identificadores internos, como `stripe_customer_id`, não são enviados ao frontend.
 - Testes usam mocks e não cobram cartões reais.
+
+## Resultado e aprendizados
+
+- **Resultado:** fluxo demonstrável de assinatura com Checkout, Billing Portal, webhook validado e sincronização no Supabase.
+- **Aprendizado:** pagamentos assíncronos, idempotência, validação server-side e testes offline com mocks.
 
 ## Ambiente de testes
 
